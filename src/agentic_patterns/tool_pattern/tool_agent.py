@@ -70,7 +70,7 @@ class ToolAgent:
         
         self.client = Groq()
         self.model = model
-        self.tools = tools if isinstance(tools, list) else [tools]
+        self.tools = tools if isinstance(tools, list) else [tools]  # Nếu không phải list thì chuyển thành list
         self.tools_dict = {tool.name: tool for tool in self.tools}
     
     def add_tool_signatures(self)->str:
@@ -84,34 +84,41 @@ class ToolAgent:
     def process_tool_calls(self, tool_calls_content: list) -> dict:
         """
         Processes each tool call, validates arguments, executes the tools, and collects results.
+        Xử lý mỗi lần gọi tool, xử lý các tools và thu thập kết quả.
 
         Args:
             tool_calls_content (list): List of strings, each representing a tool call in JSON format.
+                                       Danh sách các strings, mỗi cái biểu diễn một tool call ở dạng JSON
 
         Returns:
             dict: A dictionary where the keys are tool call IDs and values are the results from the tools.
+            dict: Một dict ở đó các key là những ID của tool call và các giá trị là kết quả từ tool
         """
-        observations = {}
-        for tool_call_str in tool_calls_content:
-            tool_call = json.loads(tool_call_str)
-            tool_name = tool_call["name"]
-            tool = self.tools_dict[tool_name]
+        observations = {} # KHởi tạo một dict
+        for tool_call_str in tool_calls_content:    # Vòng lặp qua danh sách gọi tool
+            tool_call = json.loads(tool_call_str)   # Đọc JSON để đưa về dict như Python
+            tool_name = tool_call["name"]           # Lấy tên của tool
+            tool = self.tools_dict[tool_name]       # Lấy instance Tool tương ứng với tên tool
 
-            print(Fore.GREEN + f"\nUsing Tool: {tool_name}")
+            print(Fore.GREEN + f"\nUsing Tool: {tool_name}")    # In ra xem đang dùng tool gì
 
             # Validate and execute the tool call
+            # Validate arguments của tool call dựa trên tool signature (schema)
+
             validated_tool_call = validate_arguments(
                 tool_call, json.loads(tool.fn_signature)
             )
+            # In ra Tool dict
             print(Fore.GREEN + f"\nTool call dict: \n{validated_tool_call}")
 
-            result = tool.run(**validated_tool_call["arguments"])
+            result = tool.run(**validated_tool_call["arguments"])   # Giải nén để lấy tham số truyền vào phương thức run
             print(Fore.GREEN + f"\nTool result: \n{result}")
 
             # Store the result using the tool call ID
-            observations[validated_tool_call["id"]] = result
+            observations[validated_tool_call["id"]] = result 
 
         return observations
+
     def run(
         self,
         user_msg: str,
@@ -125,28 +132,39 @@ class ToolAgent:
         Returns:
             str: The final output after executing the tool and generating a response from the model.
         """
+        # Khởi tạo prompt có cấu trúc từ message của người dùng với role là user
         user_prompt = build_prompt_structure(prompt=user_msg, role="user")
 
-        tool_chat_history = ChatHistory(
+        # Khởi tạo lịch sử hội thoại” (chat history)
+        # Mục đích chính của ChatHistory là: giữ ngữ cảnh suy nghĩ của LLM qua nhiều lượt
+        tool_chat_history = ChatHistory(    # tool_chat_history: dùng cho LLM quyết định CÓ GỌI TOOL HAY KHÔNG
             [
                 build_prompt_structure(
-                    prompt=TOOL_SYSTEM_PROMPT % self.add_tool_signatures(),
+                    prompt=TOOL_SYSTEM_PROMPT % self.add_tool_signatures(), # Là string formatting kiểu cũ của Python → nhét tool signatures vào system prompt.prompt = prompt từ hệ thống (hướng dẫn LLM cách dùng tool)
                     role="system",
                 ),
-                user_prompt,
+                user_prompt,    # câu hỏi / yêu cầu của người dùng
             ]
         )
-        agent_chat_history = ChatHistory([user_prompt])
+        agent_chat_history = ChatHistory([user_prompt]) # agent_chat_history: dùng cho LLM trả lời cuối cùng (KHÔNG chứa system tool prompt)
 
+
+        # Lấy ra phản hội theo phương thức comletions_create
         tool_call_response = completions_create(
             self.client, messages=tool_chat_history, model=self.model
         )
+
+        # Lấy content bên trong các thẻ
         tool_calls = extract_tag_content(str(tool_call_response), "tool_call")
 
+        # Để đảm bảo chỉ gọi tool khi cần thiết
         if tool_calls.found:
             observations = self.process_tool_calls(tool_calls.content)
             update_chat_history(
-                agent_chat_history, f'f"Observation: {observations}"', "user"
+                agent_chat_history,
+                f"Observation: {observations}",
+                "user" 
             )
 
+        # Trả về response
         return completions_create(self.client, agent_chat_history, self.model)
